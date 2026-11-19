@@ -1,0 +1,203 @@
+#!/usr/bin/env bash
+# cached-git: git, except that `fetch` from the cached repository is served from the shared
+# bundle-checkout cache. The cache first downloads from GitHub only what it lacks, then the fetch
+# itself runs against the local cache. Everything else is passed to git unchanged.
+set -euo pipefail
+
+[ "$#" -gt 0 ] || exec git
+orig=("$@")
+
+here=$(cd "$(dirname "$0")" && pwd)
+# shellcheck source=../scripts/lib.sh
+. "$here/../scripts/lib.sh"
+
+global=()
+config=()
+while [ "$#" -gt 0 ]; do
+  case $1 in
+    -c)
+      [ "$#" -ge 2 ] || exec git "${orig[@]}"
+      global+=("$1" "$2")
+      config+=("$1" "$2")
+      shift 2
+      ;;
+    -C | --git-dir | --work-tree | --namespace | --config-env)
+      [ "$#" -ge 2 ] || exec git "${orig[@]}"
+      global+=("$1" "$2")
+      shift 2
+      ;;
+    -*)
+      global+=("$1")
+      shift
+      ;;
+    *) break ;;
+  esac
+done
+[ "${1:-}" = fetch ] || exec git "${orig[@]}"
+shift
+
+g() { git ${global[@]+"${global[@]}"} "$@"; }
+
+common=$(g rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || exec git "${orig[@]}"
+
+# The cache is the alternate object store the action set up, else the one it exported.
+cache=
+if [ -f "$common/objects/info/alternates" ]; then
+  while IFS= read -r alt; do
+    candidate=$(dirname "$alt")
+    if [ "$(git -C "$candidate" config --bool bundle-checkout.cache 2>/dev/null || true)" = true ]; then
+      cache=$candidate
+      break
+    fi
+  done <"$common/objects/info/alternates"
+fi
+if [ -z "$cache" ] && [ -n "${BUNDLE_CHECKOUT_CACHE:-}" ] && [ -d "$BUNDLE_CHECKOUT_CACHE/objects" ]; then
+  cache=$BUNDLE_CHECKOUT_CACHE
+fi
+[ -n "$cache" ] || exec git "${orig[@]}"
+cache_origin=$(git -C "$cache" config remote.origin.url) || exec git "${orig[@]}"
+
+opts=()
+pos=()
+while [ "$#" -gt 0 ]; do
+  case $1 in
+    # The full history is already local: these would only turn the repository shallow, and a
+    # filter would only make it a partial clone.
+    --depth | --deepen | --shallow-since | --shallow-exclude | --filter) shift 2 ;;
+    --depth=* | --deepen=* | --shallow-since=* | --shallow-exclude=* | --filter=* | --unshallow | --update-shallow) shift ;;
+    --all | --multiple | --stdin) exec git "${orig[@]}" ;;
+    -j | --jobs | -o | --server-option | --upload-pack | --refmap | --negotiation-tip | --recurse-submodules-default)
+      [ "$#" -ge 2 ] || exec git "${orig[@]}"
+      opts+=("$1" "$2")
+      shift 2
+      ;;
+    --)
+      shift
+      pos+=("$@")
+      break
+      ;;
+    -*)
+      opts+=("$1")
+      shift
+      ;;
+    *)
+      pos+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [ "${#pos[@]}" -gt 0 ]; then
+  remote=${pos[0]}
+else
+  branch=$(g symbolic-ref -q --short HEAD 2>/dev/null || true)
+  remote=$( [ -n "$branch" ] && g config "branch.$branch.remote" 2>/dev/null || echo origin)
+fi
+# The configured URL as written: `git remote get-url` would apply insteadOf rewrites (proxies).
+remote_url=$(g config "remote.$remote.url" 2>/dev/null || echo "$remote")
+[ "$(bc_url_key "$remote_url")" = "$(bc_url_key "$cache_origin")" ] || exec git "${orig[@]}"
+
+specs=()
+if [ "${#pos[@]}" -gt 1 ]; then
+  specs=("${pos[@]:1}")
+elif [ "$remote" != "$remote_url" ]; then
+  while IFS= read -r spec; do specs+=("$spec"); done < <(g config --get-all "remote.$remote.fetch" || true)
+fi
+[ "${#specs[@]}" -gt 0 ] || specs=('+refs/heads/*:refs/heads/*')
+
+# Credentials persisted by the action live in the workspace config; the cache has none.
+auth=()
+while IFS= read -r line; do
+  [ -n "$line" ] && auth+=(-c "${line%% *}=${line#* }")
+done < <(g config --local --get-regexp '^http\..*\.extraheader$' 2>/dev/null || true)
+
+cg() { git ${config[@]+"${config[@]}"} ${auth[@]+"${auth[@]}"} "$@"; }
+
+# The cache mirrors GitHub refs, so a pruning fetch has to prune the mirror first. Objects stay.
+prune=$(g config --bool "remote.$remote.prune" 2>/dev/null || g config --bool fetch.prune 2>/dev/null || echo false)
+for o in ${opts[@]+"${opts[@]}"}; do
+  case $o in
+    -p | --prune) prune=true ;;
+    --no-prune) prune=false ;;
+  esac
+done
+cache_fetch_opts=(--progress --no-tags --no-write-fetch-head)
+[ "$prune" = true ] && cache_fetch_opts+=(--prune)
+
+cache_specs=()
+short=()
+short_full=()
+for spec in "${specs[@]}"; do
+  s=${spec#+}
+  case $s in ^*) continue ;; esac
+  src=${s%%:*}
+  if [ -z "$src" ]; then
+    continue
+  elif bc_is_sha "$src"; then
+    bc_has_commit "$cache" "$src" || cache_specs+=("+$src:refs/bundle-checkout/commits/$src")
+  elif [ "$src" = HEAD ] || [ "$src" = @ ]; then
+    exec git "${orig[@]}"
+  else
+    case $src in
+      refs/* | *\**) cache_specs+=("+$src:$src") ;;
+      *) short+=("$src") ;;
+    esac
+  fi
+done
+
+if [ "${#short[@]}" -gt 0 ]; then
+  # Qualify short names in git's own order: tags first, then branches.
+  names=()
+  for s in "${short[@]}"; do names+=("refs/tags/$s" "refs/heads/$s"); done
+  advertised=$(cg ls-remote "$cache_origin" "${names[@]}" | cut -f2)
+  for s in "${short[@]}"; do
+    found=
+    for full in "refs/tags/$s" "refs/heads/$s"; do
+      if printf '%s\n' "$advertised" | grep -qxF "$full"; then
+        found=$full
+        break
+      fi
+    done
+    # Without this the fetch would quietly succeed from a stale ref of the cache.
+    if [ -z "$found" ]; then
+      echo "fatal: couldn't find remote ref $s" >&2
+      exit 128
+    fi
+    cache_specs+=("+$found:$found")
+    short_full+=("$found")
+  done
+fi
+
+# The local fetch must use the names resolved against GitHub: the cache may still hold a stale
+# ref that git's own short-name rules would prefer, such as a deleted tag named like a branch.
+if [ "${#short[@]}" -gt 0 ] && [ "${#pos[@]}" -gt 1 ]; then
+  resolved=("${pos[0]}")
+  for spec in "${pos[@]:1}"; do
+    plus=
+    rest=$spec
+    case $rest in +*) plus=+ rest=${rest#+} ;; esac
+    src=${rest%%:*}
+    dst=
+    case $rest in *:*) dst=:${rest#*:} ;; esac
+    i=0
+    while [ "$i" -lt "${#short[@]}" ]; do
+      if [ "${short[$i]}" = "$src" ]; then
+        spec=$plus${short_full[$i]}$dst
+        break
+      fi
+      i=$((i + 1))
+    done
+    resolved+=("$spec")
+  done
+  pos=("${resolved[@]}")
+fi
+
+if [ "${#cache_specs[@]}" -gt 0 ]; then
+  bc_lock "$cache"
+  cg -C "$cache" fetch "${cache_fetch_opts[@]}" origin "${cache_specs[@]}"
+  bc_unlock
+fi
+
+# An exact insteadOf for the configured URL is longer than any proxy rule for the whole host,
+# so it wins; remote-tracking refs, FETCH_HEAD and --prune behave as for the real remote.
+g -c "url.$cache.insteadOf=$remote_url" fetch ${opts[@]+"${opts[@]}"} ${pos[@]+"${pos[@]}"}

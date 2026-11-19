@@ -1,0 +1,80 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: shellcheck
+        if: runner.os == 'Linux'
+        run: shellcheck scripts/*.sh bin/cached-git tests/e2e.sh
+      - name: e2e
+        run: tests/e2e.sh
+
+  # Distribution git: ubuntu:22.04 is the base of the ydb runner image (git 2.34), ubuntu:latest
+  # is the latest LTS.
+  e2e-distro-git:
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['ubuntu:22.04', 'ubuntu:latest']
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    steps:
+      - name: Install packages
+        run: apt-get update -q && DEBIAN_FRONTEND=noninteractive apt-get install -yq git curl nodejs
+      - uses: actions/checkout@v5
+      - name: e2e
+        run: |
+          git --version
+          tests/e2e.sh
+
+  action:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: action
+          fetch-depth: 0
+      - name: Serve a bundle of this repository
+        run: |
+          git -C action bundle create "$RUNNER_TEMP/repo.bundle" --all
+          cd "$RUNNER_TEMP"
+          nohup python3 -m http.server 8765 >/dev/null 2>&1 &
+          sleep 1
+      - id: first
+        uses: ./action
+        with:
+          path: first
+          bundle-url: http://127.0.0.1:8765/repo.bundle
+          cache-dir: ${{ runner.temp }}/cache
+      - id: second
+        uses: ./action
+        with:
+          path: second
+          fetch-depth: 2
+          bundle-url: http://127.0.0.1:8765/missing.bundle
+          cache-dir: ${{ runner.temp }}/cache
+      - name: Check
+        run: |
+          set -x
+          test "${{ steps.first.outputs.commit }}" = "$GITHUB_SHA"
+          test "${{ steps.second.outputs.commit }}" = "$GITHUB_SHA"
+          test -s first/.git/objects/info/alternates
+          test "$(git -C second rev-parse --is-shallow-repository)" = false
+          if git -C action rev-parse -q --verify HEAD~1 >/dev/null; then
+            test "$(git -C second rev-parse HEAD~1)" = "$(git -C action rev-parse HEAD~1)"
+          fi
+          test "$GIT" = cached-git
+          cd first
+          cached-git fetch origin "${{ github.event.repository.default_branch }}"
+          cached-git fetch --depth=1 origin "$GITHUB_SHA"
+          test "$(git rev-parse --is-shallow-repository)" = false

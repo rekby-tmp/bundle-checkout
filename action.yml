@@ -1,0 +1,55 @@
+name: Bundle checkout
+description: >-
+  Drop-in replacement for actions/checkout that takes most objects from a git bundle and a shared
+  local cache, downloading only the missing delta from GitHub.
+inputs:
+  repository:
+    description: Repository name with owner, as in actions/checkout.
+    default: ${{ github.repository }}
+  ref:
+    description: Branch, tag or SHA to check out. Defaults to the ref and SHA of the triggering event.
+    default: ''
+  token:
+    description: Token used to fetch from GitHub and, with persist-credentials, by later git commands.
+    default: ${{ github.token }}
+  path:
+    description: Path under $GITHUB_WORKSPACE to place the repository at.
+    default: ''
+  fetch-depth:
+    description: >-
+      Accepted for compatibility. With the cache the full history is available locally at no
+      network cost and the checkout is never shallow; 0 additionally fetches all branches and tags.
+      Without a cache it limits the fetch like in actions/checkout.
+    default: '1'
+  sparse-checkout:
+    description: Sparse checkout patterns, one per line.
+    default: ''
+  sparse-checkout-cone-mode:
+    description: Whether sparse checkout uses cone mode.
+    default: 'true'
+  persist-credentials:
+    description: Keep the token in the local git config until the post step.
+    default: 'true'
+  filter:
+    description: Partial clone filter. Used only without a cache; with a cache all objects are local anyway.
+    default: ''
+  allow-unsafe-pr-checkout:
+    description: Allow checking out fork pull request code in pull_request_target and workflow_run workflows.
+    default: 'false'
+  bundle-url:
+    description: >-
+      HTTP(S) URL of a git bundle of the repository, or an absolute path to a local file. Used only
+      when the runner has no cache for the repository yet.
+    default: ''
+  cache-dir:
+    description: Directory for the shared object caches. Defaults to $RUNNER_TOOL_CACHE/bundle-checkout.
+    default: ''
+outputs:
+  ref:
+    description: The branch, tag or SHA that was checked out.
+  commit:
+    description: The commit SHA that was checked out.
+runs:
+  using: node24
+  main: dist/main.js
+  post: dist/post.js
