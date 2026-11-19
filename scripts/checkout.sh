@@ -217,16 +217,16 @@ fi
 case $ref in
   refs/heads/*)
     branch=${ref#refs/heads/}
-    git -C "$repo_path" checkout -q --force -B "$branch" "refs/remotes/origin/$branch"
+    git -C "$repo_path" checkout --progress --force -B "$branch" "refs/remotes/origin/$branch"
     ;;
-  refs/pull/*) git -C "$repo_path" checkout -q --force "refs/remotes/pull/${ref#refs/pull/}" ;;
+  refs/pull/*) git -C "$repo_path" checkout --progress --force "refs/remotes/pull/${ref#refs/pull/}" ;;
   refs/tags/*)
     if [ -n "$commit" ] && [ "$(git -C "$repo_path" rev-parse "$ref^{commit}")" != "$commit" ]; then
       bc_die "tag $ref no longer points to $commit"
     fi
-    git -C "$repo_path" checkout -q --force "$ref"
+    git -C "$repo_path" checkout --progress --force "$ref"
     ;;
-  *) git -C "$repo_path" checkout -q --force "${commit:-$ref}" ;;
+  *) git -C "$repo_path" checkout --progress --force "${commit:-$ref}" ;;
 esac
 head=$(git -C "$repo_path" rev-parse HEAD)
 bc_log "checked out ${ref:-$commit} at $head (cache: $use_cache, bundle downloaded: $bundle_used)"
