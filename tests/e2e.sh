@@ -77,7 +77,7 @@ grep -qx "BUNDLE_CHECKOUT_CACHE=$cache" "$T/env" || fail "BUNDLE_CHECKOUT_CACHE 
 grep -qx "GIT=cached-git" "$T/env" || fail "GIT export"
 eq "$(cat "$T/path")" "$root/bin" "PATH export"
 eq "$(git -C "$T/ws/a" count-objects -v | sed -n 's/^count: //p')" 0 "loose objects in the workspace"
-eq "$(ls "$T/ws/a/.git/objects/pack" | wc -l | tr -d ' ')" 0 "packs in the workspace"
+eq "$(find "$T/ws/a/.git/objects/pack" -type f | wc -l | tr -d ' ')" 0 "packs in the workspace"
 [ ! -e "$cache/bundle-refs" ] || fail "temporary file left behind"
 ok "first checkout from the bundle plus delta"
 

@@ -37,7 +37,7 @@ Before finishing a change, run:
 
 ```bash
 tests/e2e.sh
-shellcheck scripts/*.sh bin/cached-git tests/e2e.sh
+shellcheck -x -P SCRIPTDIR scripts/*.sh bin/cached-git tests/e2e.sh
 ```
 
 CI (`.github/workflows/test.yml`) runs both on Linux and macOS, plus a real run of the action.
