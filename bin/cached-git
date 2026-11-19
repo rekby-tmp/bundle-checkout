@@ -105,7 +105,8 @@ elif [ "$remote" != "$remote_url" ]; then
 fi
 [ "${#specs[@]}" -gt 0 ] || specs=('+refs/heads/*:refs/heads/*')
 
-# Credentials persisted by the action live in the workspace config; the cache has none.
+# Credentials persisted by the action live in the workspace config; the cache has none, so every
+# request to GitHub runs in the cache: in the workspace the header would be sent twice.
 auth=()
 while IFS= read -r line; do
   [ -n "$line" ] && auth+=(-c "${line%% *}=${line#* }")
@@ -149,7 +150,7 @@ if [ "${#short[@]}" -gt 0 ]; then
   # Qualify short names in git's own order: tags first, then branches.
   names=()
   for s in "${short[@]}"; do names+=("refs/tags/$s" "refs/heads/$s"); done
-  advertised=$(cg ls-remote "$cache_origin" "${names[@]}" | cut -f2)
+  advertised=$(cg -C "$cache" ls-remote "$cache_origin" "${names[@]}" | cut -f2)
   for s in "${short[@]}"; do
     found=
     for full in "refs/tags/$s" "refs/heads/$s"; do

@@ -49,6 +49,8 @@ case $server in
 esac
 
 # Runs git with the token for requests to the server; the token is never written to the cache.
+# Commands that need no repository run in /: a working copy with a persisted token would send
+# its Authorization header a second time.
 remote_git() {
   if [ -n "$auth_value" ]; then
     git -c "$auth_key=$auth_value" "$@"
@@ -68,7 +70,7 @@ if [ -z "$ref" ]; then
       *) ref=refs/heads/$ref ;;
     esac
   else
-    ref=$(remote_git ls-remote --symref "$origin_url" HEAD | sed -n 's/^ref: \(.*\)[[:space:]]HEAD$/\1/p')
+    ref=$(remote_git -C / ls-remote --symref "$origin_url" HEAD | sed -n 's/^ref: \(.*\)[[:space:]]HEAD$/\1/p')
     [ -n "$ref" ] || bc_die "cannot resolve the default branch of $origin_url"
   fi
 elif bc_is_sha "$ref"; then
@@ -82,7 +84,7 @@ case $ref in
   *)
     # An unqualified name is a branch, else a tag, as in actions/checkout. One small request
     # instead of fetching the refs/heads/<name>* patterns that actions/checkout uses.
-    found=$(remote_git ls-remote "$origin_url" "refs/heads/$ref" "refs/tags/$ref" | cut -f2)
+    found=$(remote_git -C / ls-remote "$origin_url" "refs/heads/$ref" "refs/tags/$ref" | cut -f2)
     if printf '%s\n' "$found" | grep -qx "refs/heads/$ref"; then
       ref=refs/heads/$ref
     elif printf '%s\n' "$found" | grep -qx "refs/tags/$ref"; then
