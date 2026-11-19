@@ -35,8 +35,7 @@ What happens:
    `git diff`, `HEAD~1`, `git merge-base` and `git worktree` see the full history.
 
 If the bundle cannot be downloaded and there is no cache yet, the action warns and does an
-ordinary shallow checkout from GitHub, like `actions/checkout`. A download that stays below
-1 MB/s for a minute counts as failed, because the checkout from GitHub is faster then.
+ordinary shallow checkout from GitHub, like `actions/checkout`.
 
 ## Inputs
 

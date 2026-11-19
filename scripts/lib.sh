@@ -173,10 +173,9 @@ bc_cache_init_from_bundle() {
   fi
   start=$(date +%s)
   bc_log "downloading and unpacking bundle $url"
-  # No --retry: a retry would resend the start of the file into the same stream. A transfer that
-  # stays below 1 MB/s for a minute is cut: the checkout from GitHub is the faster way then.
+  # No --retry: a retry would resend the start of the file into the same stream.
   # /dev/stdin rather than "-", which older git versions do not accept.
-  if ! curl --fail --location --speed-limit 1000000 --speed-time 60 "$url" |
+  if ! curl --fail --location "$url" |
     git -C "$tmp" bundle unbundle $progress /dev/stdin >"$tmp/bundle-refs"; then
     rm -rf "$tmp"
     return 1
