@@ -1,0 +1,73 @@
+# Temporary: a real check on ydb-platform/ydb. Lives only in the test-ydb-bundle branch.
+name: ydb-real
+
+on:
+  push:
+    branches: [test-ydb-bundle]
+  workflow_dispatch:
+
+env:
+  BUNDLE_URL: https://storage.yandexcloud.net/pg-ext-deploy/ydb-mirror/A5A269B5-E212-4167-916A-A937A0414866/ydb-mirror.bundle
+
+jobs:
+  ydb:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: action
+      - run: df -h "$GITHUB_WORKSPACE" "$RUNNER_TEMP"; git --version
+
+      - name: First checkout of main (bundle + delta)
+        id: first
+        uses: ./action
+        with:
+          repository: ydb-platform/ydb
+          ref: main
+          fetch-depth: 2
+          path: ydb
+          bundle-url: ${{ env.BUNDLE_URL }}
+          cache-dir: ${{ runner.temp }}/cache
+
+      - name: Second checkout of the same commit (no download expected)
+        uses: ./action
+        with:
+          repository: ydb-platform/ydb
+          ref: ${{ steps.first.outputs.commit }}
+          path: ydb2
+          bundle-url: ${{ env.BUNDLE_URL }}
+          cache-dir: ${{ runner.temp }}/cache
+
+      - name: Sparse checkout of a stable branch, as in ydb workflows
+        uses: ./action
+        with:
+          repository: ydb-platform/ydb
+          ref: stable-25-4-1-enterprise
+          path: sparse
+          sparse-checkout: |
+            .github
+            ydb/ci/
+          bundle-url: ${{ env.BUNDLE_URL }}
+          cache-dir: ${{ runner.temp }}/cache
+
+      - name: cached-git like the ydb workflow scripts
+        working-directory: ydb
+        run: |
+          set -euxo pipefail
+          git rev-parse HEAD HEAD~1
+          test "$(git rev-parse --is-shallow-repository)" = false
+          time cached-git fetch origin main
+          time cached-git fetch origin "stable-25-4-1-enterprise:refs/remotes/origin/stable-25-4-1-enterprise"
+          time cached-git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main" "refs/pull/1/head"
+          time cached-git fetch --shallow-since="30 days ago" origin "main:refs/remotes/origin/main"
+          time cached-git fetch --depth=1 origin "$(git rev-parse HEAD~1)"
+          git worktree add ../baseline "$(git rev-parse HEAD~1)"
+          (cd ../baseline && time cached-git fetch origin main)
+          test "$(git rev-parse --is-shallow-repository)" = false
+          python3 -c 'import os; print(os.environ["GIT"])'
+
+      - name: Sizes
+        if: always()
+        run: |
+          du -sh "$RUNNER_TEMP/cache"/*/*/* ydb/.git ydb2/.git sparse/.git || true
+          ls -l "$RUNNER_TEMP"/cache/github.com/ydb-platform/ydb.git/objects/pack/*.pack || true
